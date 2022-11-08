@@ -13,6 +13,7 @@ from zipfile import ZipFile
 import shutil
 import os.path
 from tqdm import tqdm
+
 try:
     from BytesIO import BytesIO
 except ImportError:
@@ -34,8 +35,8 @@ def data_iterator(data, batch_size):
     shuf_data = [dat[idxs] for dat in data]
 
     # Does not yield last remainder of size less than batch_size
-    for i in range(max_idx//batch_size):
-        data_batch = [dat[i*batch_size:(i+1)*batch_size] for dat in shuf_data]
+    for i in range(max_idx // batch_size):
+        data_batch = [dat[i * batch_size:(i + 1) * batch_size] for dat in shuf_data]
         yield data_batch
 
 
@@ -82,7 +83,7 @@ def download_dataset(dataset, files, data_dir):
             zip_ref.extractall('raw_data/')
 
         os.rename(target_dir, data_dir)
-        #shutil.rmtree(target_dir)
+        # shutil.rmtree(target_dir)
 
 
 def load_data(fname, seed=1234, verbose=True):
@@ -351,8 +352,8 @@ def load_data(fname, seed=1234, verbose=True):
 
         chunksize = 10000
         data = pd.DataFrame()
-        pbar = tqdm(pd.read_csv(filename, header=0, usecols=['uid', 'iid', 'rating'], 
-                    chunksize=chunksize), total=row_count//chunksize)
+        pbar = tqdm(pd.read_csv(filename, header=0, usecols=['uid', 'iid', 'rating'],
+                                chunksize=chunksize), total=row_count // chunksize)
         for chunk in pbar:
             data = pd.concat([data, chunk], ignore_index=True)
 
@@ -367,6 +368,114 @@ def load_data(fname, seed=1234, verbose=True):
 
         u_nodes_ratings, v_nodes_ratings = u_nodes_ratings.astype(np.int64), v_nodes_ratings.astype(np.int64)
         ratings = ratings.astype(np.float32)
+
+    elif fname == 'openml':
+        files = ['/openml_matrix.csv']
+        filename = data_dir + files[0]
+
+        dtypes = {
+            'task_id': np.int64, 'flow_id': np.int64,
+            'associated': np.int64}
+
+        # use engine='python' to ignore warning about switching to python backend when using regexp for sep
+        data = pd.read_csv(filename, sep=',', header=None,
+                           names=['task_id', 'flow_id', 'associated'], converters=dtypes, engine='python')
+
+        # shuffle here like cf-nade paper with python's own random class
+        # make sure to convert to list, otherwise random.shuffle acts weird on it without a warning
+        data_array = data.values.tolist()
+        random.seed(seed)
+        random.shuffle(data_array)
+        data_array = np.array(data_array)
+
+        u_nodes_ratings = data_array[:, 0].astype(dtypes['task_id'])
+        v_nodes_ratings = data_array[:, 1].astype(dtypes['flow_id'])
+        ratings = data_array[:, 2].astype(dtypes['associated'])
+
+        u_nodes_ratings, u_dict, num_users = map_data(u_nodes_ratings)
+        v_nodes_ratings, v_dict, num_items = map_data(v_nodes_ratings)
+
+        u_nodes_ratings, v_nodes_ratings = u_nodes_ratings.astype(np.int64), v_nodes_ratings.astype(np.int64)
+        ratings = ratings.astype(np.int64)
+
+    elif fname == 'openmlV2':
+
+        files = ['/original_matrixV3.csv']
+
+        filename = data_dir + files[0]
+
+        dtypes = {
+            'task_id': np.int64, 'flow_id': np.int64,
+            'predictive_accuracy': np.float64}
+
+        # task_dtypes = {'task_id': np.int64, 'dataset_id': np.int64, 'task_type': np.}
+
+        actual_data = pd.read_csv(filename)
+        data = actual_data[["task_id", "flow_id", "predictive_accuracy"]]
+        task_side_information = actual_data[["task_id", "task_type", "dataset_id"]]
+        flow_side_information = actual_data[["flow_id", "flow_class"]]
+
+        # data = pd.read_csv(filename, sep=',', header=None,
+        #                    usecols=['task_id', 'flow_id', 'predictive_accuracy'], engine='python')
+
+        data['predictive_accuracy'] = data['predictive_accuracy'].multiply(10).round()
+        data = data.iloc[1:, :]
+        print(f"The data after round off is {data}")
+
+        # shuffle here like cf-nade paper with python's own random class
+        # make sure to convert to list, otherwise random.shuffle acts weird on it without a warning
+        data_array = data.values.tolist()
+
+        random.seed(seed)
+        random.shuffle(data_array)
+        data_array = np.array(data_array)
+
+        u_nodes_ratings = data_array[:, 0].astype(dtypes['task_id'])
+        v_nodes_ratings = data_array[:, 1].astype(dtypes['flow_id'])
+        ratings = data_array[:, 2].astype(dtypes['predictive_accuracy'])
+
+        u_nodes_ratings, u_dict, num_users = map_data(u_nodes_ratings)
+        v_nodes_ratings, v_dict, num_items = map_data(v_nodes_ratings)
+
+        u_nodes_ratings, v_nodes_ratings = u_nodes_ratings.astype(np.int64), v_nodes_ratings.astype(np.int64)
+        ratings = ratings.astype(np.int64)
+
+        # Task Features
+
+        # task_side_information = pd.read_csv(filename, header=None,
+        #                                     names=['task_id', 'dataset_id', 'task_type'], engine='python')
+
+        task_type = set(task_side_information['task_type'].values.tolist())
+
+        task_type_dict = {f: i for i, f in enumerate(task_type, start=1)}
+
+        num_feats = 1 + len(task_type_dict)
+
+        u_features = np.zeros((num_users, num_feats), dtype=np.float32)
+        for _, row in task_side_information.iterrows():
+            u_id = row['task_id']
+            if u_id in u_dict.keys():
+                # dataset id
+                u_features[u_dict[u_id], 0] = row['dataset_id']
+                # task type
+                u_features[u_dict[u_id], task_type_dict[row['task_type']]] = 1.
+
+        u_features = sp.csr_matrix(u_features)
+
+        # flow features
+        flow_class = set(flow_side_information['flow_class'].values.tolist())
+        flow_class_dict = {f: i for i, f in enumerate(flow_class)}
+        flow_num_feats = len(flow_class_dict)
+
+        v_features = np.zeros((num_items, flow_num_feats), dtype=np.float32)
+
+        for _, row in flow_side_information.iterrows():
+            v_id = row['flow_id']
+            if v_id in v_dict.keys():
+                # task class
+                v_features[v_dict[v_id], flow_class_dict[row['flow_class']]] = 1.
+
+        v_features = sp.csr_matrix(v_features)
 
     else:
         raise ValueError('Dataset name not recognized: ' + fname)

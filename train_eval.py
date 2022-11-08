@@ -13,6 +13,7 @@ from torch_geometric.data import DataLoader, DenseDataLoader as DenseLoader
 from tqdm import tqdm
 import pdb
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from util_functions import PyGGraph_to_nx
@@ -29,25 +30,24 @@ def train_multiple_epochs(train_dataset,
                           lr_decay_factor,
                           lr_decay_step_size,
                           weight_decay,
-                          ARR=0, 
-                          test_freq=1, 
-                          logger=None, 
-                          continue_from=None, 
+                          ARR=0,
+                          test_freq=1,
+                          logger=None,
+                          continue_from=None,
                           res_dir=None):
-
     rmses = []
 
     if train_dataset.__class__.__name__ == 'MyDynamicDataset':
         num_workers = mp.cpu_count()
     else:
         num_workers = 2
-    train_loader = DataLoader(train_dataset, batch_size, shuffle=True, 
+    train_loader = DataLoader(train_dataset, batch_size, shuffle=True,
                               num_workers=num_workers)
     if test_dataset.__class__.__name__ == 'MyDynamicDataset':
         num_workers = mp.cpu_count()
     else:
         num_workers = 2
-    test_loader = DataLoader(test_dataset, batch_size, shuffle=False, 
+    test_loader = DataLoader(test_dataset, batch_size, shuffle=False,
                              num_workers=num_workers)
 
     model.to(device).reset_parameters()
@@ -73,7 +73,7 @@ def train_multiple_epochs(train_dataset,
     else:
         pbar = range(start_epoch, epochs + start_epoch)
     for epoch in pbar:
-        train_loss = train(model, optimizer, train_loader, device, regression=True, ARR=ARR, 
+        train_loss = train(model, optimizer, train_loader, device, regression=True, ARR=ARR,
                            show_progress=batch_pbar, epoch=epoch)
         if epoch % test_freq == 0:
             rmses.append(eval_rmse(model, test_loader, device, show_progress=batch_pbar))
@@ -114,10 +114,9 @@ def train_multiple_epochs(train_dataset,
 def test_once(test_dataset,
               model,
               batch_size,
-              logger=None, 
-              ensemble=False, 
+              logger=None,
+              ensemble=False,
               checkpoints=None):
-
     test_loader = DataLoader(test_dataset, batch_size, shuffle=False)
     model.to(device)
     t_start = time.perf_counter()
@@ -133,7 +132,7 @@ def test_once(test_dataset,
         'epoch': epoch_info,
         'train_loss': 0,
         'test_rmse': rmse,
-        }
+    }
     if logger is not None:
         logger(eval_info, None, None)
     return rmse
@@ -146,7 +145,7 @@ def num_graphs(data):
         return data.x.size(0)
 
 
-def train(model, optimizer, loader, device, regression=False, ARR=0, 
+def train(model, optimizer, loader, device, regression=False, ARR=0,
           show_progress=False, epoch=None):
     model.train()
     total_loss = 0
@@ -167,10 +166,10 @@ def train(model, optimizer, loader, device, regression=False, ARR=0,
         if ARR != 0:
             for gconv in model.convs:
                 w = torch.matmul(
-                    gconv.att, 
-                    gconv.basis.view(gconv.num_bases, -1)
+                    gconv.comp,
+                    gconv.weight.view(gconv.num_bases, -1)
                 ).view(gconv.num_relations, gconv.in_channels, gconv.out_channels)
-                reg_loss = torch.sum((w[1:, :, :] - w[:-1, :, :])**2)
+                reg_loss = torch.sum((w[1:, :, :] - w[:-1, :, :]) ** 2)
                 loss += ARR * reg_loss
         loss.backward()
         total_loss += loss.item() * num_graphs(data)
@@ -211,6 +210,7 @@ def eval_loss_ensemble(model, checkpoints, loader, device, regression=False, sho
     for i, checkpoint in enumerate(checkpoints):
         if show_progress:
             print('Testing begins...')
+            print(f"checkpoint is {checkpoint}")
             pbar = tqdm(loader)
         else:
             pbar = loader
@@ -272,7 +272,7 @@ def visualize(model, graphs, res_dir, data_name, class_values, num=5, sort_by='p
     scores = highest_scores + lowest_scores
     ys = highest_ys + lowest_ys
     type_to_label = {0: 'u0', 1: 'v0', 2: 'u1', 3: 'v1', 4: 'u2', 5: 'v2'}
-    type_to_color = {0: 'xkcd:red', 1: 'xkcd:blue', 2: 'xkcd:orange', 
+    type_to_color = {0: 'xkcd:red', 1: 'xkcd:blue', 2: 'xkcd:orange',
                      3: 'xkcd:lightblue', 4: 'y', 5: 'g'}
     plt.axis('off')
     f = plt.figure(figsize=(20, 10))
@@ -294,22 +294,29 @@ def visualize(model, graphs, res_dir, data_name, class_values, num=5, sort_by='p
             pos[v0], pos[bottom_v_node] = pos[bottom_v_node], pos[v0]
         labels = {x: type_to_label[y] for x, y in nx.get_node_attributes(g, 'type').items()}
         node_colors = [type_to_color[y] for x, y in nx.get_node_attributes(g, 'type').items()]
+        print(f"label values are as follows {labels}")
         edge_types = nx.get_edge_attributes(g, 'type')
+        print("edge_types values are as follows\n")
+        print(edge_types)
+        print("graph edges are as follows\n")
+        print(g.edges())
+        print("class values are as follows\n")
+        print(class_values)
         edge_types = [class_values[edge_types[x]] for x in g.edges()]
-        axs[i//num, i%num].axis('off')
-        nx.draw_networkx(g, pos, 
-                #labels=labels, 
-                with_labels=False, 
-                node_size=150, 
-                node_color=node_colors, edge_color=edge_types, 
-                ax=axs[i//num, i%num], edge_cmap=cmap, edge_vmin=vmin, edge_vmax=vmax, 
-                )
+        axs[i // num, i % num].axis('off')
+        nx.draw_networkx(g, pos,
+                         # labels=labels,
+                         with_labels=False,
+                         node_size=150,
+                         node_color=node_colors, edge_color=edge_types,
+                         ax=axs[i // num, i % num], edge_cmap=cmap, edge_vmin=vmin, edge_vmax=vmax,
+                         )
         # make u0 v0 on top of other nodes
         nx.draw_networkx_nodes(g, {u0: pos[u0]}, nodelist=[u0], node_size=150,
-                node_color='xkcd:red', ax=axs[i//num, i%num])
+                               node_color='xkcd:red', ax=axs[i // num, i % num])
         nx.draw_networkx_nodes(g, {v0: pos[v0]}, nodelist=[v0], node_size=150,
-                node_color='xkcd:blue', ax=axs[i//num, i%num])
-        axs[i//num, i%num].set_title('{:.4f} ({:})'.format(
+                               node_color='xkcd:blue', ax=axs[i // num, i % num])
+        axs[i // num, i % num].set_title('{:.4f} ({:})'.format(
             scores[i], ys[i]), x=0.5, y=-0.05, fontsize=20
         )
     f.subplots_adjust(right=0.85)
@@ -318,8 +325,7 @@ def visualize(model, graphs, res_dir, data_name, class_values, num=5, sort_by='p
         class_values = np.linspace(min(class_values), max(class_values), 20, dtype=int).tolist()
     cbar = plt.colorbar(sm, cax=cbar_ax, ticks=class_values)
     cbar.ax.tick_params(labelsize=22)
-    f.savefig(os.path.join(res_dir, "visualization_{}_{}.pdf".format(data_name, sort_by)), 
-            interpolation='nearest', bbox_inches='tight')
-    
-    
-    
+    # f.savefig(os.path.join(res_dir, "visualization_{}_{}.pdf".format(data_name, sort_by)),
+    #       interpolation='nearest', bbox_inches='tight')
+    f.savefig(os.path.join(res_dir, "visualization_{}_{}.pdf".format(data_name, sort_by)),
+              bbox_inches='tight')

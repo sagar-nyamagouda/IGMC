@@ -206,7 +206,12 @@ class IGMC(GNN):
         items = data.x[:, 1] == 1
         x = torch.cat([concat_states[users], concat_states[items]], 1)
         if self.side_features:
-            x = torch.cat([x, data.u_feature, data.v_feature], 1)
+            if data.u_feature is not None and data.v_feature is not None:
+                x = torch.cat([x, data.u_feature, data.v_feature], 1)
+            elif data.u_feature is not None:
+                x = torch.cat([x, data.u_feature], 1)
+            else:
+                x = torch.cat([x, data.v_feature], 1)
 
         x = F.relu(self.lin1(x))
         x = F.dropout(x, p=0.5, training=self.training)

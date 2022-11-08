@@ -128,6 +128,7 @@ def create_trainvaltest_split(dataset, seed=1234, testing=False, datasplit_path=
         print('Reading processed dataset from file...')
         with open(datasplit_path, 'rb') as f:
             num_users, num_items, u_nodes, v_nodes, ratings, u_features, v_features = pkl.load(f)
+            print(f"rating are as follows{ratings}")
 
         if verbose:
             print('Number of users = %d' % num_users)
@@ -147,6 +148,7 @@ def create_trainvaltest_split(dataset, seed=1234, testing=False, datasplit_path=
             ratings[i] = rating_map[x]
 
     rating_dict = {r: i for i, r in enumerate(np.sort(np.unique(ratings)).tolist())}
+    #print(f"rating dict is {rating_dict}")
 
     # number of test and validation edges
     if dataset == 'ml_25m':
@@ -183,18 +185,29 @@ def create_trainvaltest_split(dataset, seed=1234, testing=False, datasplit_path=
         u_train_idx = np.hstack([u_train_idx, u_val_idx])
         v_train_idx = np.hstack([v_train_idx, v_val_idx])
         train_labels = np.hstack([train_labels, val_labels])
+        print(f"train labels is {train_labels}")
 
     class_values = np.sort(np.unique(ratings))
+    print(f"class label values are {class_values}")
 
     # make training adjacency matrix
-    if post_rating_map is None:
-        data = train_labels + 1.
+    if post_rating_map is None and (dataset == 'openml' or dataset == 'openmlV2'):
+        data = train_labels
+    elif post_rating_map is None:
+        data = train_labels + 1
     else:
         data = np.array([post_rating_map[r] for r in class_values[train_labels]]) + 1.
     data = data.astype(np.float32)
+    print(f"training adjacency matrix {np.unique(data)}")
+    print(f"size of the data is {len(data)}")
+    print(f"size of the u_train_idx is {len(u_train_idx)}")
+    print(f"size of the v_train_idx is {len(v_train_idx)}")
 
     rating_mx_train = sp.csr_matrix((data, [u_train_idx, v_train_idx]), 
                                     shape=[num_users, num_items], dtype=np.float32)
+    ratings_matrix = list(set(i for j in rating_mx_train.toarray() for i in j))
+    print(f"rating_mx_train is {np.unique(ratings_matrix)}")
+    print(f"train_labels is {np.unique(train_labels)}")
 
     return u_features, v_features, rating_mx_train, train_labels, u_train_idx, v_train_idx, \
         val_labels, u_val_idx, v_val_idx, test_labels, u_test_idx, v_test_idx, class_values
@@ -250,6 +263,7 @@ def load_data_monti(dataset, testing=False, rating_map=None, post_rating_map=Non
 
     # assumes that ratings_train contains at least one example of every rating type
     rating_dict = {r: i for i, r in enumerate(np.sort(np.unique(ratings)).tolist())}
+
 
     labels = np.full((num_users, num_items), neutral_rating, dtype=np.int32)
     labels[u_nodes, v_nodes] = np.array([rating_dict[r] for r in ratings])
