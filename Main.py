@@ -137,7 +137,15 @@ if __name__ == '__main__':
     parser.add_argument('--ratio', type=float, default=1.0,
                         help="For ml datasets, if ratio < 1, downsample training data to the\
                         target ratio")
-
+    parser.add_argument('--user-test', action='store_true', default=False,
+                        help='if True, test on the u_nodes and v_nodes passed by the user')
+    parser.add_argument('--task-id', nargs='+', help='task id for which link with flow id needs to be found')
+    parser.add_argument('--flow-id', nargs='+', help='flow id for which link with task id needs to be found')
+    parser.add_argument('--rating', nargs='+', help='rating between task and flow')
+    parser.add_argument('--all-flow-id-mapping', action='store_true', default=False,
+                        help='if True, find all the possible recommendation for a particular task with other flow ids')
+    parser.add_argument('--model-accuracy', action='store_true', default=False,
+                        help='if True, Finds the accuracy of the model by using the test graphs')
     '''
         Set seeds, prepare for transfer learning (if --transfer)
     '''
@@ -245,7 +253,7 @@ if __name__ == '__main__':
         (
             u_features, v_features, adj_train, train_labels, train_u_indices, train_v_indices,
             val_labels, val_u_indices, val_v_indices, test_labels, test_u_indices,
-            test_v_indices, class_values
+            test_v_indices, class_values, u_dict, v_dict
         ) = create_trainvaltest_split(
             args.data_name, 1234, args.testing, datasplit_path, True, True, rating_map,
             post_rating_map, args.ratio
@@ -307,6 +315,7 @@ if __name__ == '__main__':
         test_u_indices, test_v_indices = test_u_indices[:num_data], test_v_indices[:num_data]
 
     train_indices = (train_u_indices, train_v_indices)
+    print(f"train indices are as follows {train_indices}")
     val_indices = (val_u_indices, val_v_indices)
     test_indices = (test_u_indices, test_v_indices)
     print('#train: %d, #val: %d, #test: %d' % (
@@ -375,6 +384,69 @@ if __name__ == '__main__':
             v_features,
             class_values,
             max_num=args.max_val_num
+        )
+
+    if args.user_test:
+        task_id = []
+        flow_id = []
+        dataset_class = 'MyDynamicDataset' if args.dynamic_test else 'MyDataset'
+        for task in args.task_id:
+            task_id.append(u_dict[int(task)])
+        for flow in args.flow_id:
+            flow_id.append(v_dict[int(flow)])
+        task_indices = np.array(task_id, dtype=np.int64)
+        flow_indices = np.array(flow_id, dtype=np.int64)
+        ratings = np.array(args.rating, dtype=np.int64)
+        test_indices = (task_indices, flow_indices)
+        test_labels = ratings
+        print(f"user test indices are as follows {test_indices}")
+        test_graphs = eval(dataset_class)(
+            'data/{}{}/{}/utest'.format(*data_combo),
+            adj_train,
+            test_indices,
+            test_labels,
+            args.hop,
+            args.sample_ratio,
+            args.max_nodes_per_hop,
+            u_features,
+            v_features,
+            class_values,
+            max_num=args.max_test_num
+        )
+
+    if args.all_flow_id_mapping:
+        if len(args.task_id) > 1 or len(args.flow_id) > 1 or len(args.rating) > 1:
+            print("all flow id mapping accepts only 1 task id and flow id to generate all flow id mapping")
+            exit()
+        flow_id = [v_dict[int(flow)] for flow in args.flow_id]
+        all_flow_id = [v_dict[int(flow)] for flow in list(v_dict.keys())]
+        remaining_flow_id = [x for x in all_flow_id if x not in flow_id]
+        flow_id = flow_id + remaining_flow_id
+        task_id = [u_dict[int(task)] for task in args.task_id * len(remaining_flow_id)]
+        rating_values = [rating for rating in args.rating]
+        zero_ratings = [0] * len(remaining_flow_id)
+        rating_values = rating_values + zero_ratings
+
+        dataset_class = 'MyDynamicDataset' if args.dynamic_test else 'MyDataset'
+
+        task_indices = np.array(task_id, dtype=np.int64)
+        flow_indices = np.array(flow_id, dtype=np.int64)
+        ratings = np.array(rating_values, dtype=np.int64)
+        test_indices = (task_indices, flow_indices)
+        test_labels = ratings
+        print(f"user test indices are as follows {test_indices}")
+        test_graphs = eval(dataset_class)(
+            'data/{}{}/{}/vtest'.format(*data_combo),
+            adj_train,
+            test_indices,
+            test_labels,
+            args.hop,
+            args.sample_ratio,
+            args.max_nodes_per_hop,
+            u_features,
+            v_features,
+            class_values,
+            max_num=args.max_test_num
         )
 
     # Determine testing data (on which data to evaluate the trained model
@@ -498,11 +570,15 @@ if __name__ == '__main__':
                 model.load_state_dict(torch.load(args.model_pos))
                 rmse = test_once(test_graphs, model, args.batch_size, logger=None)
                 epoch_info = 'transfer {}, epoch {}'.format(args.transfer, args.epoch)
-            print('Test rmse is: {:.6f}'.format(rmse))
+                print('Test rmse is: {:.6f}'.format(rmse))
 
-        eval_info = {
-            'epoch': epoch_info,
-            'train_loss': 0,
-            'test_rmse': rmse,
-        }
-        logger(eval_info, None, None)
+        # eval_info = {
+        #     'epoch': epoch_info,
+        #     'train_loss': 0,
+        #     'test_rmse': rmse,
+        # }
+        # logger(eval_info, None, None)
+
+    if args.model_accuracy:
+        model.load_state_dict(torch.load(args.model_pos))
+        find_model_accuracy(model, test_graphs)

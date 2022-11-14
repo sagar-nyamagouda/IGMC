@@ -9,7 +9,8 @@ import torch.nn.functional as F
 from torch import tensor
 from torch.optim import Adam
 from sklearn.model_selection import StratifiedKFold
-from torch_geometric.data import DataLoader, DenseDataLoader as DenseLoader
+# from torch_geometric.data import DataLoader, DenseDataLoader as DenseLoader
+from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 import pdb
 import matplotlib
@@ -73,8 +74,8 @@ def train_multiple_epochs(train_dataset,
     else:
         pbar = range(start_epoch, epochs + start_epoch)
     for epoch in pbar:
-        train_loss = train(model, optimizer, train_loader, device, regression=True, ARR=ARR,
-                           show_progress=batch_pbar, epoch=epoch)
+        train_loss, epoch_acc = train(model, optimizer, train_loader, device, regression=True, ARR=ARR,
+                                      show_progress=batch_pbar, epoch=epoch)
         if epoch % test_freq == 0:
             rmses.append(eval_rmse(model, test_loader, device, show_progress=batch_pbar))
         else:
@@ -83,13 +84,14 @@ def train_multiple_epochs(train_dataset,
             'epoch': epoch,
             'train_loss': train_loss,
             'test_rmse': rmses[-1],
+            'accuracy': epoch_acc,
         }
         if not batch_pbar:
             pbar.set_description(
-                'Epoch {}, train loss {:.6f}, test rmse {:.6f}'.format(*eval_info.values())
+                'Epoch {}, train loss {:.6f}, test rmse {:.6f}, accuracy {}'.format(*eval_info.values())
             )
         else:
-            print('Epoch {}, train loss {:.6f}, test rmse {:.6f}'.format(*eval_info.values()))
+            print('Epoch {}, train loss {:.6f}, test rmse {:.6f}, accuracy {}'.format(*eval_info.values()))
 
         if epoch % lr_decay_step_size == 0:
             for param_group in optimizer.param_groups:
@@ -157,12 +159,15 @@ def train(model, optimizer, loader, device, regression=False, ARR=0,
         optimizer.zero_grad()
         data = data.to(device)
         out = model(data)
+        out_accuracy = torch.round(out)
         if regression:
             loss = F.mse_loss(out, data.y.view(-1))
+            acc = accuracy(out_accuracy, data.y.view(-1))
         else:
             loss = F.nll_loss(out, data.y.view(-1))
+            acc = accuracy(out_accuracy, data.y.view(-1))
         if show_progress:
-            pbar.set_description('Epoch {}, batch loss: {}'.format(epoch, loss.item()))
+            pbar.set_description('Epoch {}, batch loss: {}, accuracy: {}'.format(epoch, loss.item(), acc))
         if ARR != 0:
             for gconv in model.convs:
                 w = torch.matmul(
@@ -175,7 +180,7 @@ def train(model, optimizer, loader, device, regression=False, ARR=0,
         total_loss += loss.item() * num_graphs(data)
         optimizer.step()
         torch.cuda.empty_cache()
-    return total_loss / len(loader.dataset)
+    return total_loss / len(loader.dataset), acc
 
 
 def eval_loss(model, loader, device, regression=False, show_progress=False):
@@ -204,9 +209,44 @@ def eval_rmse(model, loader, device, show_progress=False):
     return rmse
 
 
-def eval_loss_ensemble(model, checkpoints, loader, device, regression=False, show_progress=False):
+def accuracy(pred, target):
+    r"""Computes the accuracy of predictions.
+
+    Args:
+        pred (Tensor): The predictions.
+        target (Tensor): The targets.
+
+    :rtype: int
+    """
+    return (pred == target).sum().item() / target.numel()
+
+
+def find_model_accuracy(model, graphs):
+    model.eval()
+    model.to(device)
+    R = []
+    Y = []
+    graph_loader = DataLoader(graphs, 50, shuffle=False)
+    for data in tqdm(graph_loader):
+        data = data.to(device)
+        r = model(data).detach()
+        y = data.y
+        R.extend(r.view(-1).tolist())
+        Y.extend(y.view(-1).tolist())
+    predicted = torch.round(torch.tensor(R))
+    actual = torch.tensor(Y)
+    acc = accuracy(predicted, actual)
+
+    print(f"The accuracy of the graph learning model is {acc}")
+
+
+def eval_loss_ensemble(model, checkpoints, loader, device, regression=False, show_progress=False, accuracy_flag=False):
     loss = 0
     Outs = []
+    correct = 0
+    total = 0
+    eval_accu = []
+    accuracy_score = 0
     for i, checkpoint in enumerate(checkpoints):
         if show_progress:
             print('Testing begins...')
@@ -217,6 +257,7 @@ def eval_loss_ensemble(model, checkpoints, loader, device, regression=False, sho
         model.load_state_dict(torch.load(checkpoint))
         model.eval()
         outs = []
+        out_acc = []
         if i == 0:
             ys = []
         for data in pbar:
@@ -226,6 +267,8 @@ def eval_loss_ensemble(model, checkpoints, loader, device, regression=False, sho
             with torch.no_grad():
                 out = model(data)
                 outs.append(out)
+                out_acc.append(out)
+                print(f"Values of model outs are {outs}")
         if i == 0:
             ys = torch.cat(ys, 0)
         outs = torch.cat(outs, 0).view(-1, 1)
@@ -235,6 +278,17 @@ def eval_loss_ensemble(model, checkpoints, loader, device, regression=False, sho
         loss += F.mse_loss(Outs, ys, reduction='sum').item()
     else:
         loss += F.nll_loss(Outs, ys, reduction='sum').item()
+    print(f"size of ys is {ys.size(0)} and size of out is {Outs.size(0)}")
+    print(f"values of tensor ys are {ys} and values of tensor Outs are {Outs}")
+
+    if accuracy_flag:
+        # accuracy_score += accuracy(Outs, ys)
+        _, predicted = torch.max(out_acc, 1)
+        total += ys.size(0)
+        correct += predicted.eq(ys).sum().item()
+        accu = 100. * correct / total
+        eval_accu.append(accu)
+        print(f"Accuracy score is {accuracy_score}")
     torch.cuda.empty_cache()
     return loss / len(loader.dataset)
 
@@ -245,7 +299,7 @@ def eval_rmse_ensemble(model, checkpoints, loader, device, show_progress=False):
     return rmse
 
 
-def visualize(model, graphs, res_dir, data_name, class_values, num=5, sort_by='prediction'):
+def visualize(model, graphs, res_dir, data_name, class_values, num=10, sort_by='prediction'):
     model.eval()
     model.to(device)
     R = []
@@ -265,6 +319,32 @@ def visualize(model, graphs, res_dir, data_name, class_values, num=5, sort_by='p
         order = np.random.permutation(range(len(R))).tolist()
     highest = [PyGGraph_to_nx(graphs[i]) for i in order[-num:][::-1]]
     lowest = [PyGGraph_to_nx(graphs[i]) for i in order[:num]]
+    for i in order[-num:][::-1]:
+        print(f"highest graph -- {graphs[i]}")
+        print(f"data.y value is --{graphs[i].y}")
+        print(f"data.u_node is -- {graphs[i].u_nodes}")
+        print(f"data.v_node is -- {graphs[i].v_nodes}")
+        print(f"task id is -- {graphs[i].task_id}")
+        print(f"flow id is -- {graphs[i].flow_id}")
+        print(f"highest score from model output -- {R[i]}")
+        print(f"highest score actual label -- {Y[i]}")
+    for i in order[:num]:
+        print(f"lowest graph -- {graphs[i]}")
+        print(f"data.y value is --{graphs[i].y}")
+        print(f"data.u_node is -- {graphs[i].u_nodes}")
+        print(f"data.v_node is -- {graphs[i].v_nodes}")
+        print(f"task id is -- {graphs[i].task_id}")
+        print(f"flow id is -- {graphs[i].flow_id}")
+        print(f"lowest score from model output -- {R[i]}")
+        print(f"lowest score actual label -- {Y[i]}")
+    for g in highest:
+        print(f"highest === {g}")
+        edge_types = nx.get_edge_attributes(g, 'type')
+        print(f"edge types for this graph is {edge_types}")
+    for g in lowest:
+        print(f"lowest === {g}")
+        edge_types = nx.get_edge_attributes(g, 'type')
+        print(f"edge types for this graph is {edge_types}")
     highest_scores = [R[i] for i in order[-num:][::-1]]
     lowest_scores = [R[i] for i in order[:num]]
     highest_ys = [Y[i] for i in order[-num:][::-1]]
@@ -275,7 +355,7 @@ def visualize(model, graphs, res_dir, data_name, class_values, num=5, sort_by='p
     type_to_color = {0: 'xkcd:red', 1: 'xkcd:blue', 2: 'xkcd:orange',
                      3: 'xkcd:lightblue', 4: 'y', 5: 'g'}
     plt.axis('off')
-    f = plt.figure(figsize=(20, 10))
+    f = plt.figure(figsize=(40, 20))
     axs = f.subplots(2, num)
     cmap = plt.cm.get_cmap('rainbow')
     vmin, vmax = min(class_values), max(class_values)
@@ -294,14 +374,13 @@ def visualize(model, graphs, res_dir, data_name, class_values, num=5, sort_by='p
             pos[v0], pos[bottom_v_node] = pos[bottom_v_node], pos[v0]
         labels = {x: type_to_label[y] for x, y in nx.get_node_attributes(g, 'type').items()}
         node_colors = [type_to_color[y] for x, y in nx.get_node_attributes(g, 'type').items()]
-        print(f"label values are as follows {labels}")
         edge_types = nx.get_edge_attributes(g, 'type')
-        print("edge_types values are as follows\n")
-        print(edge_types)
-        print("graph edges are as follows\n")
-        print(g.edges())
-        print("class values are as follows\n")
-        print(class_values)
+        # print("edge_types values are as follows\n")
+        # print(edge_types)
+        # print("graph edges are as follows\n")
+        # print(g.edges())
+        # print("class values are as follows\n")
+        # print(class_values)
         edge_types = [class_values[edge_types[x]] for x in g.edges()]
         axs[i // num, i % num].axis('off')
         nx.draw_networkx(g, pos,

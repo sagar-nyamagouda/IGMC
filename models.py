@@ -3,7 +3,7 @@ import math
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import Linear, Conv1d
-from torch_geometric.nn import GCNConv, RGCNConv, global_sort_pool, global_add_pool
+from torch_geometric.nn import GCNConv, RGCNConv, FastRGCNConv, RGATConv, global_sort_pool, global_add_pool
 from torch_geometric.utils import dropout_adj
 from util_functions import *
 import pdb
@@ -170,7 +170,7 @@ class DGCNN_RS(DGCNN):
 class IGMC(GNN):
     # The GNN model of Inductive Graph-based Matrix Completion. 
     # Use RGCN convolution + center-nodes readout.
-    def __init__(self, dataset, gconv=RGCNConv, latent_dim=[32, 32, 32, 32], 
+    def __init__(self, dataset, gconv=RGCNConv, latent_dim=[32, 32, 32, 32],
                  num_relations=5, num_bases=2, regression=False, adj_dropout=0.2, 
                  force_undirected=False, side_features=False, n_side_features=0, 
                  multiply_by=1):
@@ -182,7 +182,8 @@ class IGMC(GNN):
         self.convs.append(gconv(dataset.num_features, latent_dim[0], num_relations, num_bases))
         for i in range(0, len(latent_dim)-1):
             self.convs.append(gconv(latent_dim[i], latent_dim[i+1], num_relations, num_bases))
-        self.lin1 = Linear(2*sum(latent_dim), 128)
+        self.lin1 = Linear(2*sum(latent_dim), 4*sum(latent_dim))
+        self.interLin1 = Linear(4 * sum(latent_dim), 128)
         self.side_features = side_features
         if side_features:
             self.lin1 = Linear(2*sum(latent_dim)+n_side_features, 128)
@@ -215,8 +216,10 @@ class IGMC(GNN):
 
         x = F.relu(self.lin1(x))
         x = F.dropout(x, p=0.5, training=self.training)
+        x = F.relu(self.interLin1(x))
+        x = F.dropout(x, p=0.3, training=self.training)
         x = self.lin2(x)
         if self.regression:
             return x[:, 0] * self.multiply_by
         else:
-            return F.log_softmax(x, dim=-1)
+            return F.log_softmax(x, dim=1)

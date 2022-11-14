@@ -437,8 +437,14 @@ def load_data(fname, seed=1234, verbose=True):
         u_nodes_ratings, u_dict, num_users = map_data(u_nodes_ratings)
         v_nodes_ratings, v_dict, num_items = map_data(v_nodes_ratings)
 
+        print(f"u_node_ratings values are {u_nodes_ratings} and u_dict is {u_dict}")
+        print(f"v_node_ratings values are {v_nodes_ratings} and v_dict is {v_dict}")
+
         u_nodes_ratings, v_nodes_ratings = u_nodes_ratings.astype(np.int64), v_nodes_ratings.astype(np.int64)
         ratings = ratings.astype(np.int64)
+
+        print(f"u_node_ratings values are {u_nodes_ratings}")
+        print(f"ratings values are {ratings}")
 
         # Task Features
 
@@ -460,7 +466,9 @@ def load_data(fname, seed=1234, verbose=True):
                 # task type
                 u_features[u_dict[u_id], task_type_dict[row['task_type']]] = 1.
 
+        print(f"task feature matrix is before csr matrix is {u_features}")
         u_features = sp.csr_matrix(u_features)
+        print(f"task feature matrix is after csr matrix is {u_features}")
 
         # flow features
         flow_class = set(flow_side_information['flow_class'].values.tolist())
@@ -486,4 +494,4 @@ def load_data(fname, seed=1234, verbose=True):
         print('Number of links = %d' % ratings.shape[0])
         print('Fraction of positive links = %.4f' % (float(ratings.shape[0]) / (num_users * num_items),))
 
-    return num_users, num_items, u_nodes_ratings, v_nodes_ratings, ratings, u_features, v_features
+    return num_users, num_items, u_nodes_ratings, v_nodes_ratings, ratings, u_features, v_features, u_dict, v_dict

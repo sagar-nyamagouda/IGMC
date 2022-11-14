@@ -127,7 +127,7 @@ def create_trainvaltest_split(dataset, seed=1234, testing=False, datasplit_path=
     if datasplit_from_file and os.path.isfile(datasplit_path):
         print('Reading processed dataset from file...')
         with open(datasplit_path, 'rb') as f:
-            num_users, num_items, u_nodes, v_nodes, ratings, u_features, v_features = pkl.load(f)
+            num_users, num_items, u_nodes, v_nodes, ratings, u_features, v_features, u_dict, v_dict = pkl.load(f)
             print(f"rating are as follows{ratings}")
 
         if verbose:
@@ -137,18 +137,18 @@ def create_trainvaltest_split(dataset, seed=1234, testing=False, datasplit_path=
             print('Fraction of positive links = %.4f' % (float(ratings.shape[0]) / (num_users * num_items),))
 
     else:
-        num_users, num_items, u_nodes, v_nodes, ratings, u_features, v_features = load_data(dataset, seed=seed,
+        num_users, num_items, u_nodes, v_nodes, ratings, u_features, v_features, u_dict, v_dict = load_data(dataset, seed=seed,
                                                                                             verbose=verbose)
 
         with open(datasplit_path, 'wb') as f:
-            pkl.dump([num_users, num_items, u_nodes, v_nodes, ratings, u_features, v_features], f)
+            pkl.dump([num_users, num_items, u_nodes, v_nodes, ratings, u_features, v_features, u_dict, v_dict], f)
 
     if rating_map is not None:
         for i, x in enumerate(ratings):
             ratings[i] = rating_map[x]
 
     rating_dict = {r: i for i, r in enumerate(np.sort(np.unique(ratings)).tolist())}
-    #print(f"rating dict is {rating_dict}")
+    # print(f"rating dict is {rating_dict}")
 
     # number of test and validation edges
     if dataset == 'ml_25m':
@@ -166,6 +166,7 @@ def create_trainvaltest_split(dataset, seed=1234, testing=False, datasplit_path=
         num_train = ratings.shape[0] - num_val - num_test
 
     pairs_nonzero = np.vstack([u_nodes, v_nodes]).transpose()
+    print(f"pairs of non-zero after vstack is {pairs_nonzero}")
 
     train_pairs_idx = pairs_nonzero[0:int(num_train*ratio)]
     val_pairs_idx = pairs_nonzero[num_train:num_train + num_val]
@@ -191,12 +192,17 @@ def create_trainvaltest_split(dataset, seed=1234, testing=False, datasplit_path=
     print(f"class label values are {class_values}")
 
     # make training adjacency matrix
-    if post_rating_map is None and (dataset == 'openml' or dataset == 'openmlV2'):
-        data = train_labels
-    elif post_rating_map is None:
-        data = train_labels + 1
+    # make training adjacency matrix
+    if post_rating_map is None:
+        data = train_labels + 1.
     else:
         data = np.array([post_rating_map[r] for r in class_values[train_labels]]) + 1.
+    # if post_rating_map is None and (dataset == 'openml' or dataset == 'openmlV2'):
+    #     data = train_labels
+    # elif post_rating_map is None:
+    #     data = train_labels + 1
+    # else:
+    #     data = np.array([post_rating_map[r] for r in class_values[train_labels]]) + 1.
     data = data.astype(np.float32)
     print(f"training adjacency matrix {np.unique(data)}")
     print(f"size of the data is {len(data)}")
@@ -205,12 +211,14 @@ def create_trainvaltest_split(dataset, seed=1234, testing=False, datasplit_path=
 
     rating_mx_train = sp.csr_matrix((data, [u_train_idx, v_train_idx]), 
                                     shape=[num_users, num_items], dtype=np.float32)
-    ratings_matrix = list(set(i for j in rating_mx_train.toarray() for i in j))
-    print(f"rating_mx_train is {np.unique(ratings_matrix)}")
-    print(f"train_labels is {np.unique(train_labels)}")
+    print(f"rating_mx_train values are as follow {rating_mx_train}")
+    ratings_matrix = list((i for j in rating_mx_train.toarray() for i in j))
+    print(f"rating_mx_train is {ratings_matrix}")
+    print(f"train_labels is {train_labels}")
 
     return u_features, v_features, rating_mx_train, train_labels, u_train_idx, v_train_idx, \
-        val_labels, u_val_idx, v_val_idx, test_labels, u_test_idx, v_test_idx, class_values
+        val_labels, u_val_idx, v_val_idx, test_labels, u_test_idx, v_test_idx, class_values, \
+        u_dict, v_dict
 
 
 def load_data_monti(dataset, testing=False, rating_map=None, post_rating_map=None):

@@ -212,6 +212,7 @@ def subgraph_extraction_labeling(ind, Arow, Acol, h=1, sample_ratio=1.0, max_nod
                                  u_features=None, v_features=None, class_values=None,
                                  y=1):
     # extract the h-hop enclosing subgraph around link 'ind'
+    task_id, flow_id = [ind[0], ind[1]]
     u_nodes, v_nodes = [ind[0]], [ind[1]]
     u_dist, v_dist = [0], [0]
     u_visited, v_visited = set([ind[0]]), set([ind[1]])
@@ -280,17 +281,20 @@ def subgraph_extraction_labeling(ind, Arow, Acol, h=1, sample_ratio=1.0, max_nod
             node_features = [u_features[0], None]
         elif v_features is not None:
             node_features = [None, v_features[0]]
-    return u, v, r, node_labels, max_node_label, y, node_features
+    return u, v, r, node_labels, max_node_label, y, node_features, u_nodes, v_nodes, task_id, flow_id
 
 
-def construct_pyg_graph(u, v, r, node_labels, max_node_label, y, node_features):
+def construct_pyg_graph(u, v, r, node_labels, max_node_label, y, node_features, u_nodes, v_nodes, task_id, flow_id):
     u, v = torch.LongTensor(u), torch.LongTensor(v)
     r = torch.LongTensor(r)
     edge_index = torch.stack([torch.cat([u, v]), torch.cat([v, u])], 0)
     edge_type = torch.cat([r, r])
     x = torch.FloatTensor(one_hot(node_labels, max_node_label + 1))
     y = torch.FloatTensor([y])
-    data = Data(x, edge_index, edge_type=edge_type, y=y)
+    u_nodes = torch.tensor(u_nodes)
+    v_nodes = torch.tensor(v_nodes)
+    data = Data(x, edge_index, edge_type=edge_type, y=y, u_nodes=u_nodes, v_nodes=v_nodes, task_id=task_id,
+                flow_id=flow_id)
 
     if node_features is not None:
         if type(node_features) == list:  # a list of u_feature and v_feature
